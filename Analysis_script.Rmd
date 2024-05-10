@@ -1,0 +1,344 @@
+---
+title: "Data Cleaning"
+author: "oyogo"
+date: "2024-05-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(data.table) # for data wrangling 
+library(plotly)   # for data visualization
+library(stringi) # package for string manipulation  
+library(dplyr) # for data manipulation/wrangling
+library(googlesheets4) # fetching data from google sheets  
+library(tidyr)
+```
+
+## Data import 
+- Use read_sheet function to fetch the data from Google sheet.  
+- Later we'll consider automating this, perhaps with crontab or windows task scheduler.  
+
+```{r} 
+
+gs4_deauth() # this deactivates authentication. We won't be prompted to login using credentials.
+
+kenya_tech_salary.data <- read_sheet("https://docs.google.com/spreadsheets/d/1Ghtm22plhLU2IlxCmzhLSsbhmv2Nsdrci3-OdorC7Ys/edit#gid=901575294")
+kenya_tech_salary <- data.table::setDT(kenya_tech_salary.data) # create a datatable object
+
+```
+
+## Data wrangling 
+Prepare the data for analysis.  
+
+```{r}
+#****
+##** Clean the column names - in keeping with naming convention for ease of wrangling.  
+##** Assign columns names.
+names(kenya_tech_salary) <- c('time.stamp','current.role','other.role','role.level',
+                              'years.experience','employer.industry','gender','tech.stack',
+                              'other.stack','monthly.gross.salary','other.benefits','work.setup',
+                              'employer.type') 
+
+##** Select needed columns
+cols.to.select <- c('current.role','role.level','years.experience','employer.industry','gender',
+                    'tech.stack','monthly.gross.salary','other.benefits','work.setup','employer.type')
+
+kenya_tech_salary <- kenya_tech_salary[,..cols.to.select] 
+
+###** clean role.level column
+###** We have 'eg' appearing in 90% of the instances. We could use this to drop all characters following it.
+###** The 10% records are for interns which don't have the characters 'eg'
+
+kenya_tech_salary <- kenya_tech_salary[,role.level:=sub('eg.*','',role.level)]
+
+###** Clean the monthly.income data:
+###** Spotted some submissions with Kshs,Euros,dollars, commas and special characters.
+###* drop the strings to remain with numeric data.   
+###* For the instances where the submission was in Euros and USD, multiply by the conversion rates accordingly. 
+kenya_tech_salary <- kenya_tech_salary[,monthly.gross.salary:=as.numeric(gsub('^0-9]','',monthly.gross.salary))]
+#kenya_tech_salary <- kenya_tech_salary[,monthly.gross.salary:=ifelse(monthly.gross.salary==600,monthly.gross.salary*131)]
+
+kenya_tech_salary <- kenya_tech_salary[complete.cases(kenya_tech_salary)&monthly.gross.salary>1000]
+
+###** Industries : best to compress them to a lean number of groups. 
+kenya_tech_salary <- kenya_tech_salary[,employer.industry:=recode(employer.industry,Fintech='IT',FinTech='IT',
+                                                                health='Health Care',Health='Health Care',NGO='Non Profit',
+                                                                Bank='Financial Services',`Insurance broker`='Financial Services',Banking='Financial Services',
+                                                                `machine learning`='IT',Telco='Telecommunications',`Fast Moving Consumer Goods`='Consumer Goods',
+                                                                `Professional Services (Accounting)`='Financial Services',Consultancy='Professional Services',
+                                                                `SAAS(Foodtech)`='IT',`People and Technology`='IT',`Manufacturing (FMCG)`='Manufacturing',`Market research`='Professional Services',
+                                                                Financial='Financial Services',`Development - INGO`='Non Profit',Religious='Non Profit',`Market Research`='Professional Services',
+                                                                Solar='Energy',`Fintech and IT`='IT',`Non Profit Organization`='Non Profit',`Socio-economic Development`='Non Profit',
+                                                                `Technology and Telecommunications`='Telecommunications',Finance='Financial Services',`E-commerce`='Retail',
+                                                                `Finance - Pensions`='Financial Services',`Wholesale and Retail`='Retail',Utilities='Retail',HR='Professional Services',
+                                                                AID='Non Profit',`Last mile off grid solar`='Energy',Technology='IT',Edtech='IT',`Consumer tech and media`='Professional Services',
+                                                                `Health NGO`='Health Care',`Enterprise AI`='IT',Taxation='Financial Services',ERP='IT',`Automotive Industry`='Manufacturing',
+                                                                Transport='Transport and Logistics',`Artificial Intelligence`='IT',Consulting='Professional Services',
+                                                                `Transportation/Airlines/Humanitarian`='Transport and Logistics',Media='Professional Services',`Sustainable energy`='Energy',
+                                                                Healtg='Health Care',Gaming='IT',Insurance='Financial Services',Hr='Professional Services',`Sales and marketing`='Professional Services',
+                                                                `FMCG consulting`='Consumer Goods',Fmcg='Consumer Goods',FMCG='Consumer Goods',Engineering='Manufacturing',
+                                                                `Government- taxation`='Financial Services',`Pension Administration`='Financial Services',`Non-profit`='Non Profit',
+                                                                `supply chain`='Transport and Logistics',Logistics='Transport and Logistics',Development='Non Profit',`Environment Conservancy`='Conservation',
+                                                                `Brand & Marketing Strategy agency.`='Professional Services',`Business Information and Credit Management`='Financial Services',
+                                                                `Production and Retail`='Retail',eMOBILITY='Transport and Logistics',`Urban development`='Infrastructure',
+                                                                )]
+
+kenya_tech_salary %>% group_by(employer.industry) %>% summarise(count=n())
+
+```
+
+## Industries and what they offer  
+- If there's one reason I love tech for, I Mean data related stuff, is the fact that there are opportunities in almost all industries. 
+The list below says it all, and actually, this is after I had compressed it to a lean number for the sake of comparison. 
+- The data records are quite low to afford us a good ground for comparing salaries across various industries. However, we can still get some glimpses from what has been already submitted. 
+- The range in salaries is quite vast in the financial services. 
+- On average, Agriculture industry seems to be paying well but things can be different given more data. Non profits and Telecommunication industries are quite close by. 
+
+```{r}
+
+pay.per.industry <- kenya_tech_salary[employer.industry!='Nil',.(average.monthly.salary=mean(monthly.gross.salary)),
+                                      by=employer.industry][,.(average.monthly.salary=sort(average.monthly.salary, decreasing = TRUE)),by=employer.industry]
+
+## Average
+pay.per.industry %>%
+  plot_ly(y=~reorder(employer.industry,-average.monthly.salary),
+          x=~average.monthly.salary,
+          type = "bar") %>%
+
+      layout(title = "What you'd get in different industries",
+             font = list(size=10, family = "Gravitas One"),
+             xaxis = list(title = "Average monthly gross salary", tickformat = "Kshs", showgrid=FALSE),
+             yaxis = list(title = "Industry", showgrid=FALSE),
+             plot_bgcolor  = "rgba(0, 0, 0, 0)",
+             paper_bgcolor = "rgba(0, 0, 0, 0)",
+             fig_bgcolor   = "rgba(0, 0, 0, 0)"
+      )%>%
+      config(displayModeBar = FALSE, displaylogo = FALSE, 
+             scrollZoom = FALSE, showAxisDragHandles = TRUE, 
+             showSendToCloud = FALSE) 
+
+## Distribution
+kenya_tech_salary[employer.industry !='Nil'] %>%
+  plot_ly(x=~reorder(employer.industry,monthly.gross.salary),
+          y=~monthly.gross.salary,
+          type='box')
+```
+
+
+## Years of experience 
+- As you'd expect, the more years of experience one has the more the salary. 
+- It's natural to be somewhat discouraged at the site of the amount guys are earning out there, but its good to understand that most cases are of those who've amassed years of experience. So yeah, be patient and keep growing your skills - in the lapse of time you'll be there as well. But of course there is also the aspect of knowing your worth, as such, getting better at negotiating for better pay.  
+- Interesting to note how, the differences in salary for the beginners and the categories up to at most 5yrs experience, is low compared to categories above 5yrs where the difference is almost 100k.  
+
+```{r}
+
+yrs.of.experience <- kenya_tech_salary[,.(average.monthly.salary=mean(monthly.gross.salary)),by=years.experience][,                                                                                                                                .(average.monthly.salary=sort(average.monthly.salary, decreasing = TRUE)),by=years.experience] 
+
+yrs.of.experience %>%
+  plot_ly(y=~reorder(years.experience,-average.monthly.salary),
+          x=~average.monthly.salary,
+          type = "bar") %>%
+
+      layout(title = "Years of experience",
+             font = list(size=10, family = "Gravitas One"),
+             yaxis = list(title = "Average monthly gross salary", tickformat = "Kshs", showgrid=FALSE),
+             xaxis = list(title = "Years of experience", showgrid=FALSE),
+             plot_bgcolor  = "rgba(0, 0, 0, 0)",
+             paper_bgcolor = "rgba(0, 0, 0, 0)",
+             fig_bgcolor   = "rgba(0, 0, 0, 0)"
+      )%>%
+      config(displayModeBar = FALSE, displaylogo = FALSE, 
+             scrollZoom = FALSE, showAxisDragHandles = TRUE, 
+             showSendToCloud = FALSE)
+
+
+```
+## Gender comparisons
+- It's lovely to see how girls have jumped into the tech train in Kenya. From the submissions in this sample survey to the myriad 'Girls in Tech' groups allover, they all seem to tell the same story - girls have not left behind. 
+- We have as much girls as men it the tech space.  I think this is worth a shout out. 
+- On the issue of pay, the average girls' monthly salary fall a little lower than that of men, but median values say otherwise.
+I'd say the differences are negligible, at least from this data.  
+
+```{r}
+
+kenya_tech_salary %>%
+  group_by(gender) %>%
+  summarise(count=n()) # interestingly they're almost equal 
+
+## Average comparisons
+gender.comparisons <- kenya_tech_salary[,.(average.monthly.salary=mean(monthly.gross.salary)),by=gender][,                                                                                                                                .(average.monthly.salary=sort(average.monthly.salary, decreasing = TRUE)),by=gender]
+
+gender.comparisons %>%
+  plot_ly(x=~reorder(gender,-average.monthly.salary),
+          y=~average.monthly.salary,
+          type = "bar") %>%
+
+      layout(title = "How do the earnings compare in terms of gender",
+             font = list(size=10, family = "Gravitas One"),
+             xaxis = list(title = "Average monthly gross salary", tickformat = "Kshs", showgrid=FALSE),
+             yaxis = list(title = "Gender", showgrid=FALSE),
+             plot_bgcolor  = "rgba(0, 0, 0, 0)",
+             paper_bgcolor = "rgba(0, 0, 0, 0)",
+             fig_bgcolor   = "rgba(0, 0, 0, 0)"
+      )%>%
+      config(displayModeBar = FALSE, displaylogo = FALSE, 
+             scrollZoom = FALSE, showAxisDragHandles = TRUE, 
+             showSendToCloud = FALSE)
+## Distribution
+kenya_tech_salary %>%
+plot_ly(x=~reorder(gender,monthly.gross.salary),
+          y=~monthly.gross.salary,
+          type='box')
+```
+
+## How established the company is 
+Start-ups in Kenya are probably not offering higher salaries than established companies, but we appreciate that someone has employment and for the fact that some of them do give opportunities for innovation and even career growth. 
+
+```{r}
+
+## employer type
+kenya_tech_salary %>%
+  group_by(employer.type) %>%
+  summarise(count=n()) # About 90% are established
+
+how.established <- kenya_tech_salary[,.(average.monthly.salary=mean(monthly.gross.salary)),by=employer.type][,                                                                                                                                .(average.monthly.salary=sort(average.monthly.salary, decreasing = TRUE)),by=employer.type]
+
+how.established %>%
+  plot_ly(x=~reorder(employer.type,-average.monthly.salary),
+          y=~average.monthly.salary,
+          type = "bar") %>%
+
+      layout(title = "How established the company is",
+             font = list(size=10, family = "Gravitas One"),
+             xaxis = list(title = "Average monthly gross salary", tickformat = "Kshs", showgrid=FALSE),
+             yaxis = list(title = "Start up or established", showgrid=FALSE),
+             plot_bgcolor  = "rgba(0, 0, 0, 0)",
+             paper_bgcolor = "rgba(0, 0, 0, 0)",
+             fig_bgcolor   = "rgba(0, 0, 0, 0)"
+      )%>%
+      config(displayModeBar = FALSE, displaylogo = FALSE, 
+             scrollZoom = FALSE, showAxisDragHandles = TRUE, 
+             showSendToCloud = FALSE)
+
+## Distribution
+kenya_tech_salary %>%
+plot_ly(x=~reorder(employer.type,monthly.gross.salary),
+          y=~monthly.gross.salary,
+          type='box')
+```
+
+## Work set-ups 
+-That companies which require employees to be in office fully pay quite low compared to those with hybrid or fully remote setups is funny - either, this is due to the fact that these are 'Kenyan' based companies as such not having as much resources in comparison to the foreign/International companies/Multinational.  
+- 
+```{r}
+
+## Work setup
+kenya_tech_salary %>%
+  group_by(work.setup) %>%
+  summarise(count=n()) # Most go to office
+## work setups and establishment
+kenya_tech_salary %>%
+  group_by(work.setup,employer.type) %>%
+  summarise(count=n())
+
+
+work_setup <- kenya_tech_salary[,.(average.monthly.salary=mean(monthly.gross.salary)),by=work.setup][,                                                                                                                                .(average.monthly.salary=sort(average.monthly.salary, decreasing = TRUE)),by=work.setup]
+
+work_setup %>%
+  plot_ly(x=~reorder(work.setup,-average.monthly.salary),
+          y=~average.monthly.salary,
+          type = "bar") %>%
+
+      layout(title = "Work Setup",
+             font = list(size=10, family = "Gravitas One"),
+             xaxis = list(title = "Average monthly gross salary", tickformat = "Kshs", showgrid=FALSE),
+             yaxis = list(title = "Work setup", showgrid=FALSE),
+             plot_bgcolor  = "rgba(0, 0, 0, 0)",
+             paper_bgcolor = "rgba(0, 0, 0, 0)",
+             fig_bgcolor   = "rgba(0, 0, 0, 0)"
+      )%>%
+      config(displayModeBar = FALSE, displaylogo = FALSE, 
+             scrollZoom = FALSE, showAxisDragHandles = TRUE, 
+             showSendToCloud = FALSE)
+
+## Distribution
+kenya_tech_salary %>%
+plot_ly(x=~reorder(work.setup,monthly.gross.salary),
+          y=~monthly.gross.salary,
+          type='box')
+```
+
+## Role level 
+- Someone said 'If in the job where you are you are not earning then ensure you're learning/growing'. 
+- Given that your role level does determine your pay, you'd better ensure that your new job offer has clear progression paths to give you a picture of how you will potentially grow. 
+This is important given that you could potentially find yourself in a company where there's no progression. 
+- 
+
+```{r}
+## role level
+kenya_tech_salary %>%
+  group_by(role.level) %>%
+  summarise(count=n()) # Most are in mid-level
+
+## Role level and work setup
+kenya_tech_salary %>%
+  group_by(role.level,work.setup) %>%
+  summarise(count=n()) 
+
+role_level <- kenya_tech_salary[,.(average.monthly.salary=mean(monthly.gross.salary)),by=role.level][,                                                                                                                                .(average.monthly.salary=sort(average.monthly.salary, decreasing = TRUE)),by=role.level]
+
+role_level %>%
+  plot_ly(x=~reorder(role.level,-average.monthly.salary),
+          y=~average.monthly.salary,
+          type = "bar") %>%
+
+      layout(title = "Role level",
+             font = list(size=10, family = "Gravitas One"),
+             xaxis = list(title = "Average monthly gross salary", tickformat = "Kshs", showgrid=FALSE),
+             yaxis = list(title = "Role level", showgrid=FALSE),
+             plot_bgcolor  = "rgba(0, 0, 0, 0)",
+             paper_bgcolor = "rgba(0, 0, 0, 0)",
+             fig_bgcolor   = "rgba(0, 0, 0, 0)"
+      )%>%
+      config(displayModeBar = FALSE, displaylogo = FALSE, 
+             scrollZoom = FALSE, showAxisDragHandles = TRUE, 
+             showSendToCloud = FALSE)
+
+## Distribution
+kenya_tech_salary %>%
+plot_ly(x=~reorder(role.level,monthly.gross.salary),
+          y=~monthly.gross.salary,
+          type='box')
+```
+
+## Data composition
+High level overview of the data submissions.
+
+```{r} 
+
+## roles
+kenya_tech_salary %>%
+  group_by(current.role) %>%
+  summarise(count=n()) # almost 90% of the submissions were of data analysts.
+
+```
+
+## Tech stacks 
+
+```{r}
+
+kenya_tech_salary <- kenya_tech_salary %>%
+  separate_rows(tech.stack,sep = ',') %>%
+  mutate(tech.stack=stri_trim(tech.stack))
+
+kenya_tech_salary$tech.stack <- stri_trim(kenya_tech_salary$tech.stack)
+
+kenya_tech_salary %>%
+  group_by(current.role,tech.stack) %>%
+  summarise(count=n())
+```
+
