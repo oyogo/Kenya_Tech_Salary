@@ -132,7 +132,7 @@ kenya_tech_salary[employer.industry !='Nil'] %>%
 ## Years of experience 
 - As you'd expect, the more years of experience one has the more the salary. 
 - It's natural to be somewhat discouraged at the site of the amount guys are earning out there, but its good to understand that most cases are of those who've amassed years of experience. So yeah, be patient and keep growing your skills - in the lapse of time you'll be there as well. But of course there is also the aspect of knowing your worth, as such, getting better at negotiating for better pay.  
-- Interesting to note how, the differences in salary for the beginners and the categories up to at most 5yrs experience, is low compared to categories above 5yrs where the difference is almost 100k.  
+- Interesting to note how, the gap in salary for the beginners and the categories up to at most 5yrs experience, is low compared to categories above 5yrs where the difference is almost 100k.  
 
 ```{r}
 
@@ -157,8 +157,8 @@ yrs.of.experience %>%
 
 
 ```
-## Gender comparisons
-- It's lovely to see how girls have jumped into the tech train in Kenya. From the submissions in this sample survey to the myriad 'Girls in Tech' groups allover, they all seem to tell the same story - girls have not left behind. 
+## Gender pay gap 
+- It's lovely to see how girls have jumped into the tech train in Kenya. From the submissions in this sample survey to the myriad 'Girls in Tech' groups allover, they all seem to tell the same story - girls are not left behind. 
 - We have as much girls as men it the tech space.  I think this is worth a shout out. 
 - On the issue of pay, the average girls' monthly salary fall a little lower than that of men, but median values say otherwise.
 I'd say the differences are negligible, at least from this data.  
@@ -192,7 +192,16 @@ gender.comparisons %>%
 kenya_tech_salary %>%
 plot_ly(x=~reorder(gender,monthly.gross.salary),
           y=~monthly.gross.salary,
-          type='box')
+          type='box') 
+
+pay.gap <- kenya_tech_salary %>%
+  group_by(current.role,years.experience) %>%
+  summarise(avg.salary.men=case_when(
+    gender == 'Male' ~ mean(monthly.gross.salary)
+  ),
+  avg.salary.women=case_when(
+    gender == 'Female' ~ mean(monthly.gross.salary)
+  ))
 ```
 
 ## How established the company is 
@@ -328,8 +337,10 @@ kenya_tech_salary %>%
 ```
 
 ## Tech stacks 
-
+* Data analysts use more of Excel,PowerBI and SQL.
+* Data Scientists use more of Excel,SQL,PowerBI data scientist use more of Python
 ```{r}
+library(networkD3)
 
 kenya_tech_salary <- kenya_tech_salary %>%
   separate_rows(tech.stack,sep = ',') %>%
@@ -337,8 +348,44 @@ kenya_tech_salary <- kenya_tech_salary %>%
 
 kenya_tech_salary$tech.stack <- stri_trim(kenya_tech_salary$tech.stack)
 
-kenya_tech_salary %>%
+tech.stack.graph.data <- kenya_tech_salary %>%
   group_by(current.role,tech.stack) %>%
-  summarise(count=n())
+  summarise(count=n()) %>%
+  mutate(tech.stack = recode(tech.stack,'Other'='Other.stacks'))
+
+names(tech.stack.graph.data) <- c('source','target','value')
+
+## Sankey diagram
+# From these flows we need to create a node data frame: it lists every entities involved in the flow
+nodes <- data.frame(
+  name=c(as.character(tech.stack.graph.data$source), 
+  as.character(tech.stack.graph.data$target)) %>% unique()
+)
+
+# With networkD3, connection must be provided using id, not using real name like in the links dataframe.. So we need to reformat it.
+tech.stack.graph.data$IDsource <- match(tech.stack.graph.data$source, nodes$name)-1 
+tech.stack.graph.data$IDtarget <- match(tech.stack.graph.data$target, nodes$name)-1
+
+
+# Make the Network 
+tech.stack_sankey <- sankeyNetwork(Links = tech.stack.graph.data, Nodes = nodes,
+              Source = "IDsource", Target = "IDtarget",
+              Value = "value", NodeID = "name", fontSize = 10,
+              sinksRight=FALSE)
+
+htmlwidgets::onRender(tech.stack_sankey, '
+  function(el) { 
+    var cols_x = this.sankey.nodes().map(d => d.x).filter((v, i, a) => a.indexOf(v) === i).sort(function(a, b){return a - b});
+    var labels = ["Role", "Tech Stack"];
+    cols_x.forEach((d, i) => {
+      d3.select(el).select("svg")
+        .append("text")
+        .attr("x", d)
+        .attr("y", 12)
+        .text(labels[i]);
+    })
+  }
+')
+
 ```
 
